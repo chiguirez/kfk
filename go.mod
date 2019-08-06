@@ -1,4 +1,4 @@
-module gitlab.ubeeqo.com/phoenix/go/kfk.git
+module github.com/chiguirez/kfk
 
 go 1.12
 
