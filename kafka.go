@@ -141,7 +141,7 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 		}
 
 		_ = c.handlerList.Handle(decodedMessage)
-		session.MarkMessage(message, "")
+		defer session.MarkMessage(message, "")
 	}
 
 	return nil
