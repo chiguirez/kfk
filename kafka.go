@@ -3,54 +3,79 @@ package kfk
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"os/signal"
-	"reflect"
-	"syscall"
-
+	"fmt"
 	"golang.org/x/sync/errgroup"
+	"reflect"
+	"sync"
 
 	"github.com/Shopify/sarama"
 )
 
 // Consumer
 
-type KafkaDecodedMessage struct {
-	Body        interface{} `json:"message_body"`
-	MessageType string      `json:"message_type"`
-}
+type TopicMap map[string] MessageHandlerList
 
-//go:generate moq -out message_handler_mock.go . messageHandler
-type messageHandler interface {
-	Handle(KafkaDecodedMessage) error
-}
-
-type MessageHandlerList map[string][]messageHandler
-
-func NewMessageHandlerList() MessageHandlerList {
-	return MessageHandlerList{}
-}
-
-func (l MessageHandlerList) AddHandler(messageType string, handler messageHandler) {
-	l[messageType] = append(l[messageType], handler)
-}
-
-func (l MessageHandlerList) Handle(decodedMessage KafkaDecodedMessage) error {
-	handlers := l[decodedMessage.MessageType]
-	if len(handlers) == 0 {
-		return nil
+func (tm TopicMap) Topics() []string  {
+	topics := reflect.ValueOf(tm).MapKeys()
+	strings := make([]string,0, len(topics))
+	for _,value := range topics {
+		strings = append(strings, value.String())
 	}
-
-	errGroup := errgroup.Group{}
-
-	for _, handler := range handlers {
-		errGroup.Go(func() error {
-			return handler.Handle(decodedMessage)
-		})
-	}
-
-	return errGroup.Wait()
+	return strings
 }
+
+type MessageHandlerList map[reflect.Type][]reflect.Value
+
+func (l MessageHandlerList) Messages() []reflect.Type  {
+	messages := reflect.ValueOf(l).MapKeys()
+	values := make([]reflect.Type,0, len(messages))
+	for _,value := range messages {
+		values = append(values, value.Type())
+	}
+	return values
+}
+
+
+type messageHandler interface {}
+
+func (l MessageHandlerList) AddHandler(message interface{}, handler messageHandler) {
+	if isStruct(message) {
+		panic("add MessageHandlerList requires an struct to decode messages into")
+	}
+	if isAFunc(handler) {
+		panic("add MessageHandlerList requires a handler to be a function")
+	}
+	if funcHaveMoreThanOneAttrib(handler) || isAttributeEqualToMessage(handler, message) {
+		errMsg := fmt.Sprintf("handler should only have one input parameter and must match %s",
+			getMessageType(message).Name())
+		panic(errMsg)
+	}
+	l[getMessageType(message)] = append(l[getMessageType(message)], reflect.ValueOf(handler))
+}
+
+func isAttributeEqualToMessage(handler messageHandler, message interface{}) bool {
+	return reflect.TypeOf(handler).In(0) != getMessageType(message)
+}
+
+func getMessageType(message interface{}) reflect.Type {
+	if reflect.TypeOf(message).Kind() == reflect.Struct{
+		return reflect.TypeOf(message)
+	}
+	return reflect.TypeOf(message).Elem()
+}
+
+func funcHaveMoreThanOneAttrib(handler messageHandler) bool {
+	return reflect.TypeOf(handler).NumIn() > 1
+}
+
+func isAFunc(handler messageHandler) bool {
+	return reflect.TypeOf(handler).Kind() != reflect.Func
+}
+
+func isStruct(message interface{}) bool {
+	return reflect.TypeOf(message).Kind() != reflect.Struct && (reflect.TypeOf(message).Kind() != reflect.Ptr || reflect.TypeOf(message).Elem().Kind() != reflect.Struct)
+}
+
 
 type KafkaConsumer struct {
 	consumerGroup sarama.ConsumerGroup
@@ -60,8 +85,7 @@ type KafkaConsumer struct {
 func NewKafkaConsumer(
 	kafkaBrokers []string,
 	consumerGroupID string,
-	handlerList MessageHandlerList,
-	topics []string,
+	topicMap TopicMap,
 ) (*KafkaConsumer, error) {
 	kafkaCfg := sarama.NewConfig()
 	kafkaCfg.Consumer.Return.Errors = true
@@ -74,54 +98,40 @@ func NewKafkaConsumer(
 	}
 
 	consumer := consumer{
-		ready:       make(chan bool, 0),
-		handlerList: handlerList,
-		topics:      topics,
+		ready:     make(chan bool, 0),
+		topicMaps: topicMap,
 	}
 
 	return &KafkaConsumer{
-		consumer:      consumer,
+		consumer:      consumer,		
 		consumerGroup: consumerGroup,
 	}, nil
 }
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
-	ctx, ctxCancel := context.WithCancel(ctx)
-
+	defer c.consumerGroup.Close()
+	topics := c.consumer.topicMaps.Topics()
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		for {
-			if err := c.consumerGroup.Consume(ctx, c.consumer.topics, &c.consumer); err != nil {
-				return err
-			}
-			if ctx.Err() != nil {
+			select {
+			case <-ctx.Done():
 				return ctx.Err()
+			default:
+				if err := c.consumerGroup.Consume(ctx, topics, &c.consumer); err != nil {
+					return err
+				}
+				c.consumer.ready = make(chan bool, 0)
 			}
-			c.consumer.ready = make(chan bool, 0)
 		}
 	})
 
-	<-c.consumer.ready
-
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-ctx.Done():
-	case <-sigterm:
-	}
-
-	ctxCancel()
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	return c.consumerGroup.Close()
+	return g.Wait()
 }
 
 type consumer struct {
-	ready       chan bool
-	handlerList MessageHandlerList
-	topics      []string
+	ready     chan bool
+	topicMaps TopicMap
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
@@ -135,12 +145,26 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		var decodedMessage KafkaDecodedMessage
-		if err := json.Unmarshal(message.Value, &decodedMessage); err != nil {
-			return err
+		messages := c.topicMaps[message.Topic].Messages()
+		for _, value := range messages {
+			messageType := reflect.New(value).Interface()
+			if err := json.Unmarshal(message.Value, messageType); err != nil {
+				continue
+			}
+			if reflect.DeepEqual(reflect.New(value).Interface(),messageType){
+				continue
+			}
+			In := make([]reflect.Value, 0, 1)
+			In = append(In, reflect.ValueOf(messageType))
+			g := sync.WaitGroup{}
+			g.Add(len(c.topicMaps[message.Topic][value]))
+			for _, value := range c.topicMaps[message.Topic][value] {
+				go func() {
+					value.Call(In)
+				}()
+			}
 		}
 
-		_ = c.handlerList.Handle(decodedMessage)
 		defer session.MarkMessage(message, "")
 	}
 
