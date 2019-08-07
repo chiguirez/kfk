@@ -41,6 +41,7 @@ func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
 		lists := MessageHandlerList{}
 		lists.AddHandler(t, func(testing.T) {})
 		lists.AddHandler(testing.B{}, func(testing.B) {})
+		lists.AddHandler(testing.B{}, func(testing.B) {})
 		t.Run("When Messages method is called then it should return as many as MessageHandler added to the list", func(t *testing.T) {
 			r.Len(lists.Messages(),2)
 		})

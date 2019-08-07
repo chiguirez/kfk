@@ -103,8 +103,10 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			for _, value := range c.schemaRegistries[message.Topic][value] {
 				go func() {
 					value.Call(In)
+					g.Done()
 				}()
 			}
+			g.Wait()
 			session.MarkMessage(message, "")
 		}
 	}
