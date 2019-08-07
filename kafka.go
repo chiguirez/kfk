@@ -23,7 +23,7 @@ type KafkaConsumer struct {
 func NewKafkaConsumer(
 	kafkaBrokers []string,
 	consumerGroupID string,
-	topicMap TopicMap,
+	schemaRegistries SchemaRegistry,
 ) (*KafkaConsumer, error) {
 	kafkaCfg := sarama.NewConfig()
 	kafkaCfg.Consumer.Return.Errors = true
@@ -37,7 +37,7 @@ func NewKafkaConsumer(
 
 	consumer := consumer{
 		ready:     make(chan bool, 0),
-		topicMaps: topicMap,
+		schemaRegistries: schemaRegistries,
 	}
 
 	return &KafkaConsumer{
@@ -48,7 +48,7 @@ func NewKafkaConsumer(
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
 	defer c.consumerGroup.Close()
-	topics := c.consumer.topicMaps.Topics()
+	topics := c.consumer.schemaRegistries.Topics()
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		for {
@@ -72,7 +72,7 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 
 type consumer struct {
 	ready     chan bool
-	topicMaps TopicMap
+	schemaRegistries SchemaRegistry
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
@@ -86,7 +86,7 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		messages := c.topicMaps[message.Topic].Messages()
+		messages := c.schemaRegistries[message.Topic].Messages()
 		for _, value := range messages {
 			base := reflect.New(value).Interface()
 
@@ -99,8 +99,8 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			In := make([]reflect.Value, 0, 1)
 			In = append(In, reflect.ValueOf(base).Elem())
 			g := sync.WaitGroup{}
-			g.Add(len(c.topicMaps[message.Topic][value]))
-			for _, value := range c.topicMaps[message.Topic][value] {
+			g.Add(len(c.schemaRegistries[message.Topic][value]))
+			for _, value := range c.schemaRegistries[message.Topic][value] {
 				go func() {
 					value.Call(In)
 				}()
@@ -111,14 +111,14 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 	return nil
 }
 
-type TopicMap map[string]MessageHandlerList
+type SchemaRegistry map[string]MessageHandlerList
 
-func (tm TopicMap) AddTopic(topic string, list MessageHandlerList){
-	tm[topic] = list
+func (sr SchemaRegistry) AddTopic(topic string, list MessageHandlerList){
+	sr[topic] = list
 }
 
-func (tm TopicMap) Topics() []string  {
-	topics := reflect.ValueOf(tm).MapKeys()
+func (sr SchemaRegistry) Topics() []string  {
+	topics := reflect.ValueOf(sr).MapKeys()
 	strings := make([]string,0, len(topics))
 	for _,value := range topics {
 		strings = append(strings, value.String())

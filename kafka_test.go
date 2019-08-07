@@ -70,7 +70,7 @@ func TestKafkaConsumer_ConsumeClaim(t *testing.T){
 
 			t.Run("Then it can be fetch with KfkConsumer", func(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
-				maps := TopicMap{}
+				maps := SchemaRegistry{}
 				lists := MessageHandlerList{}
 				lists.AddHandler(new(A), func(a A) {r.NotEmpty(a); cancel()})
 				maps.AddTopic("test_topic", lists)
