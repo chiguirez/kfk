@@ -1,8 +1,10 @@
 package kfk
 
 import (
+	"context"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
@@ -43,4 +45,42 @@ func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
 			r.Len(lists.Messages(),2)
 		})
 	})
+}
+
+type A struct{
+	ID int `json:"id"`
+	Name string `json:"name"`
+	Time time.Time `json:"time"`
+}
+
+func TestKafkaConsumer_ConsumeClaim(t *testing.T){
+	r := require.New(t)
+
+	t.Run("Given a message struct A", func(t *testing.T) {
+		message := A{
+			ID:   1,
+			Name: "Name",
+			Time: time.Now(),
+		}
+		t.Run("When Produced to Kafka test_topic", func(t *testing.T) {
+			producer, err := NewKafkaProducer([]string{":9092"})
+			r.NoError(err)
+			err = producer.Send("test_topic", "", message)
+			r.NoError(err)
+
+			t.Run("Then it can be fetch with KfkConsumer", func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				maps := TopicMap{}
+				lists := MessageHandlerList{}
+				lists.AddHandler(new(A), func(a A) {r.NotEmpty(a); cancel()})
+				maps.AddTopic("test_topic", lists)
+				kafkaConsumer, err := NewKafkaConsumer([]string{":9092"}, "test", maps)
+				r.NoError(err)
+				err = kafkaConsumer.Start(ctx)
+				r.NoError(err)
+			})
+		})
+	})
+
+
 }

@@ -3,6 +3,7 @@ package kfk
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"golang.org/x/sync/errgroup"
 	"reflect"
@@ -11,70 +12,7 @@ import (
 	"github.com/Shopify/sarama"
 )
 
-// Consumer
 
-type TopicMap map[string] MessageHandlerList
-
-func (tm TopicMap) Topics() []string  {
-	topics := reflect.ValueOf(tm).MapKeys()
-	strings := make([]string,0, len(topics))
-	for _,value := range topics {
-		strings = append(strings, value.String())
-	}
-	return strings
-}
-
-type MessageHandlerList map[reflect.Type][]reflect.Value
-
-func (l MessageHandlerList) Messages() []reflect.Type  {
-	messages := reflect.ValueOf(l).MapKeys()
-	values := make([]reflect.Type,0, len(messages))
-	for _,value := range messages {
-		values = append(values, value.Type())
-	}
-	return values
-}
-
-
-type messageHandler interface {}
-
-func (l MessageHandlerList) AddHandler(message interface{}, handler messageHandler) {
-	if isStruct(message) {
-		panic("add MessageHandlerList requires an struct to decode messages into")
-	}
-	if isAFunc(handler) {
-		panic("add MessageHandlerList requires a handler to be a function")
-	}
-	if funcHaveMoreThanOneAttrib(handler) || isAttributeEqualToMessage(handler, message) {
-		errMsg := fmt.Sprintf("handler should only have one input parameter and must match %s",
-			getMessageType(message).Name())
-		panic(errMsg)
-	}
-	l[getMessageType(message)] = append(l[getMessageType(message)], reflect.ValueOf(handler))
-}
-
-func isAttributeEqualToMessage(handler messageHandler, message interface{}) bool {
-	return reflect.TypeOf(handler).In(0) != getMessageType(message)
-}
-
-func getMessageType(message interface{}) reflect.Type {
-	if reflect.TypeOf(message).Kind() == reflect.Struct{
-		return reflect.TypeOf(message)
-	}
-	return reflect.TypeOf(message).Elem()
-}
-
-func funcHaveMoreThanOneAttrib(handler messageHandler) bool {
-	return reflect.TypeOf(handler).NumIn() > 1
-}
-
-func isAFunc(handler messageHandler) bool {
-	return reflect.TypeOf(handler).Kind() != reflect.Func
-}
-
-func isStruct(message interface{}) bool {
-	return reflect.TypeOf(message).Kind() != reflect.Struct && (reflect.TypeOf(message).Kind() != reflect.Ptr || reflect.TypeOf(message).Elem().Kind() != reflect.Struct)
-}
 
 
 type KafkaConsumer struct {
@@ -116,7 +54,10 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				if ctx.Err() != context.Canceled{
+					return ctx.Err()
+				}
+				return nil
 			default:
 				if err := c.consumerGroup.Consume(ctx, topics, &c.consumer); err != nil {
 					return err
@@ -147,15 +88,16 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 	for message := range claim.Messages() {
 		messages := c.topicMaps[message.Topic].Messages()
 		for _, value := range messages {
-			messageType := reflect.New(value).Interface()
-			if err := json.Unmarshal(message.Value, messageType); err != nil {
+			base := reflect.New(value).Interface()
+
+			if err := json.Unmarshal(message.Value, base); err != nil {
 				continue
 			}
-			if reflect.DeepEqual(reflect.New(value).Interface(),messageType){
+			if reflect.DeepEqual(reflect.New(value).Interface(),base){
 				continue
 			}
 			In := make([]reflect.Value, 0, 1)
-			In = append(In, reflect.ValueOf(messageType))
+			In = append(In, reflect.ValueOf(base).Elem())
 			g := sync.WaitGroup{}
 			g.Add(len(c.topicMaps[message.Topic][value]))
 			for _, value := range c.topicMaps[message.Topic][value] {
@@ -163,12 +105,76 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 					value.Call(In)
 				}()
 			}
+			session.MarkMessage(message, "")
 		}
-
-		defer session.MarkMessage(message, "")
 	}
-
 	return nil
+}
+
+type TopicMap map[string]MessageHandlerList
+
+func (tm TopicMap) AddTopic(topic string, list MessageHandlerList){
+	tm[topic] = list
+}
+
+func (tm TopicMap) Topics() []string  {
+	topics := reflect.ValueOf(tm).MapKeys()
+	strings := make([]string,0, len(topics))
+	for _,value := range topics {
+		strings = append(strings, value.String())
+	}
+	return strings
+}
+
+type MessageHandlerList map[reflect.Type][]reflect.Value
+
+func (l MessageHandlerList) Messages() []reflect.Type  {
+	values := make([]reflect.Type,0, len(l))
+	for key,_ := range l {
+		values = append(values, key)
+	}
+	return values
+}
+
+
+type messageHandler interface {}
+
+func (l MessageHandlerList) AddHandler(message interface{}, handler messageHandler) {
+	if !isStruct(message) {
+		panic("add MessageHandlerList requires an struct to decode messages into")
+	}
+	if isAFunc(handler) {
+		panic("add MessageHandlerList requires a handler to be a function")
+	}
+	if funcHaveMoreThanOneAttrib(handler) || isAttributeEqualToMessage(handler, message) {
+		errMsg := fmt.Sprintf("handler should only have one input parameter and must match %s",
+			getMessageType(message).Name())
+		panic(errMsg)
+	}
+	l[getMessageType(message)] = append(l[getMessageType(message)], reflect.ValueOf(handler))
+}
+
+func isAttributeEqualToMessage(handler messageHandler, message interface{}) bool {
+	return reflect.TypeOf(handler).In(0) != getMessageType(message)
+}
+
+func getMessageType(message interface{}) reflect.Type {
+	if reflect.TypeOf(message).Kind() == reflect.Struct{
+		return reflect.TypeOf(message)
+	}
+	return reflect.TypeOf(message).Elem()
+}
+
+func funcHaveMoreThanOneAttrib(handler messageHandler) bool {
+	return reflect.TypeOf(handler).NumIn() > 1
+}
+
+func isAFunc(handler messageHandler) bool {
+	return reflect.TypeOf(handler).Kind() != reflect.Func
+}
+
+func isStruct(message interface{}) bool {
+	return reflect.TypeOf(message).Kind() == reflect.Struct || reflect.TypeOf(message).Kind() == reflect.Ptr && reflect.TypeOf(message).Elem().Kind() == reflect.Struct
 }
 
 // Producer
@@ -193,44 +199,24 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 	return &KafkaProducer{producer}, nil
 }
 
-type Message interface {
-	ID() string
-}
 
-type typedMessage struct {
-	Message     `json:"message_body"`
-	MessageType string `json:"message_type"`
-}
+func (p *KafkaProducer) Send(topic string, id string, message interface{}) error {
 
-func (tm typedMessage) Raw() []byte {
-	raw, _ := json.Marshal(tm)
+	if ! isStruct(message){
+		return errors.New("send message is required to be an struct or ptr to struct")
+	}
 
-	return raw
-}
-
-func (tm typedMessage) ID() string {
-	return tm.Message.ID()
-}
-
-func (p *KafkaProducer) Send(topic string, message Message) error {
-	typedMessage := typedMessage{message, messageType(message)}
+	bytes, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
 
 	producerMessage := &sarama.ProducerMessage{
 		Topic: topic,
-		Value: sarama.ByteEncoder(typedMessage.Raw()),
-		Key:   sarama.ByteEncoder([]byte(typedMessage.ID())),
+		Key: sarama.ByteEncoder(id),
+		Value:   sarama.ByteEncoder(bytes),
 	}
-	_, _, err := p.producer.SendMessage(producerMessage)
+	_, _, err = p.producer.SendMessage(producerMessage)
 
 	return err
-}
-
-// TODO this responsibility should be in a different service
-func messageType(m Message) string {
-	rType := reflect.TypeOf(m)
-	if rType.Kind() == reflect.Ptr {
-		return rType.Elem().Name()
-	}
-
-	return rType.Name()
 }
