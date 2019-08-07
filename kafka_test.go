@@ -17,7 +17,7 @@ func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
 	})
 	t.Run("Given an invalid struct and a valid function when added as handler then it should panics", func(t *testing.T) {
 		r.Panics(func() {
-			lists.AddHandler(func(){}, func(testing.T) {})
+			lists.AddHandler(func() {}, func(testing.T) {})
 		})
 	})
 	t.Run("Given an valid struct and a invalid function when added as handler then it should panics", func(t *testing.T) {
@@ -27,7 +27,7 @@ func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
 	})
 	t.Run("Given a valid struct and a valid function but with more attributes when added as handler then it should panic", func(t *testing.T) {
 		r.Panics(func() {
-			lists.AddHandler(t, func(testing.T,testing.B) {})
+			lists.AddHandler(t, func(testing.T, testing.B) {})
 		})
 	})
 	t.Run("Given a valid struct and a valid function but attributes doesnt match struct when added as handler then it should panic", func(t *testing.T) {
@@ -36,25 +36,24 @@ func TestKafkaConsumer_MessageHandlerList(t *testing.T) {
 		})
 	})
 
-
 	t.Run("Given a valid MessageHandlerList", func(t *testing.T) {
 		lists := MessageHandlerList{}
 		lists.AddHandler(t, func(testing.T) {})
 		lists.AddHandler(testing.B{}, func(testing.B) {})
 		lists.AddHandler(testing.B{}, func(testing.B) {})
 		t.Run("When Messages method is called then it should return as many as MessageHandler added to the list", func(t *testing.T) {
-			r.Len(lists.Messages(),2)
+			r.Len(lists.Messages(), 2)
 		})
 	})
 }
 
-type A struct{
-	ID int `json:"id"`
-	Name string `json:"name"`
+type A struct {
+	ID   int       `json:"id"`
+	Name string    `json:"name"`
 	Time time.Time `json:"time"`
 }
 
-func TestKafkaConsumer_ConsumeClaim(t *testing.T){
+func TestKafkaConsumer_ConsumeClaim(t *testing.T) {
 	r := require.New(t)
 
 	t.Run("Given a message struct A", func(t *testing.T) {
@@ -73,7 +72,7 @@ func TestKafkaConsumer_ConsumeClaim(t *testing.T){
 				ctx, cancel := context.WithCancel(context.Background())
 				maps := SchemaRegistry{}
 				lists := MessageHandlerList{}
-				lists.AddHandler(new(A), func(a A) {r.NotEmpty(a); cancel()})
+				lists.AddHandler(new(A), func(a A) { r.NotEmpty(a); cancel() })
 				maps.AddTopic("test_topic", lists)
 				kafkaConsumer, err := NewKafkaConsumer([]string{":9092"}, "test", maps)
 				r.NoError(err)
@@ -82,6 +81,5 @@ func TestKafkaConsumer_ConsumeClaim(t *testing.T){
 			})
 		})
 	})
-
 
 }

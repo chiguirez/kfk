@@ -5,15 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/sync/errgroup"
 	"reflect"
 	"sync"
 
 	"github.com/Shopify/sarama"
 )
-
-
-
 
 type KafkaConsumer struct {
 	consumerGroup sarama.ConsumerGroup
@@ -36,12 +32,12 @@ func NewKafkaConsumer(
 	}
 
 	consumer := consumer{
-		ready:     make(chan bool, 0),
+		ready:            make(chan bool, 0),
 		schemaRegistries: schemaRegistries,
 	}
 
 	return &KafkaConsumer{
-		consumer:      consumer,		
+		consumer:      consumer,
 		consumerGroup: consumerGroup,
 	}, nil
 }
@@ -49,29 +45,24 @@ func NewKafkaConsumer(
 func (c *KafkaConsumer) Start(ctx context.Context) error {
 	defer c.consumerGroup.Close()
 	topics := c.consumer.schemaRegistries.Topics()
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		for {
-			select {
-			case <-ctx.Done():
-				if ctx.Err() != context.Canceled{
-					return ctx.Err()
-				}
-				return nil
-			default:
-				if err := c.consumerGroup.Consume(ctx, topics, &c.consumer); err != nil {
-					return err
-				}
-				c.consumer.ready = make(chan bool, 0)
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() != context.Canceled {
+				return ctx.Err()
 			}
+			return nil
+		default:
+			if err := c.consumerGroup.Consume(ctx, topics, &c.consumer); err != nil {
+				return err
+			}
+			c.consumer.ready = make(chan bool, 0)
 		}
-	})
-
-	return g.Wait()
+	}
 }
 
 type consumer struct {
-	ready     chan bool
+	ready            chan bool
 	schemaRegistries SchemaRegistry
 }
 
@@ -93,7 +84,7 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 			if err := json.Unmarshal(message.Value, base); err != nil {
 				continue
 			}
-			if reflect.DeepEqual(reflect.New(value).Interface(),base){
+			if reflect.DeepEqual(reflect.New(value).Interface(), base) {
 				continue
 			}
 			In := make([]reflect.Value, 0, 1)
@@ -115,14 +106,14 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 
 type SchemaRegistry map[string]MessageHandlerList
 
-func (sr SchemaRegistry) AddTopic(topic string, list MessageHandlerList){
+func (sr SchemaRegistry) AddTopic(topic string, list MessageHandlerList) {
 	sr[topic] = list
 }
 
-func (sr SchemaRegistry) Topics() []string  {
+func (sr SchemaRegistry) Topics() []string {
 	topics := reflect.ValueOf(sr).MapKeys()
-	strings := make([]string,0, len(topics))
-	for _,value := range topics {
+	strings := make([]string, 0, len(topics))
+	for _, value := range topics {
 		strings = append(strings, value.String())
 	}
 	return strings
@@ -130,16 +121,15 @@ func (sr SchemaRegistry) Topics() []string  {
 
 type MessageHandlerList map[reflect.Type][]reflect.Value
 
-func (l MessageHandlerList) Messages() []reflect.Type  {
-	values := make([]reflect.Type,0, len(l))
-	for key,_ := range l {
+func (l MessageHandlerList) Messages() []reflect.Type {
+	values := make([]reflect.Type, 0, len(l))
+	for key := range l {
 		values = append(values, key)
 	}
 	return values
 }
 
-
-type messageHandler interface {}
+type messageHandler interface{}
 
 func (l MessageHandlerList) AddHandler(message interface{}, handler messageHandler) {
 	if !isStruct(message) {
@@ -161,7 +151,7 @@ func isAttributeEqualToMessage(handler messageHandler, message interface{}) bool
 }
 
 func getMessageType(message interface{}) reflect.Type {
-	if reflect.TypeOf(message).Kind() == reflect.Struct{
+	if reflect.TypeOf(message).Kind() == reflect.Struct {
 		return reflect.TypeOf(message)
 	}
 	return reflect.TypeOf(message).Elem()
@@ -201,10 +191,9 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 	return &KafkaProducer{producer}, nil
 }
 
-
 func (p *KafkaProducer) Send(topic string, id string, message interface{}) error {
 
-	if ! isStruct(message){
+	if ! isStruct(message) {
 		return errors.New("send message is required to be an struct or ptr to struct")
 	}
 
@@ -215,8 +204,8 @@ func (p *KafkaProducer) Send(topic string, id string, message interface{}) error
 
 	producerMessage := &sarama.ProducerMessage{
 		Topic: topic,
-		Key: sarama.ByteEncoder(id),
-		Value:   sarama.ByteEncoder(bytes),
+		Key:   sarama.ByteEncoder(id),
+		Value: sarama.ByteEncoder(bytes),
 	}
 	_, _, err = p.producer.SendMessage(producerMessage)
 
