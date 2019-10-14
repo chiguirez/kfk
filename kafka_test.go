@@ -6,33 +6,25 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mitchellh/mapstructure"
 	"github.com/stretchr/testify/require"
 	"github.com/wvanbergen/kazoo-go"
 )
 
 type sentTestingMessage struct {
-	Id   string `json:"id"`
+	ID   string `json:"id"`
 	Name string `json:"name"`
-}
-
-func (m sentTestingMessage) ID() string {
-	return m.Id
 }
 
 func TestKafkaProduceAndConsume(t *testing.T) {
 	assert := require.New(t)
 
 	var (
-		messageHandler *messageHandlerMock
-		kafkaConsumer  *KafkaConsumer
-		kafkaProducer  *KafkaProducer
-		err            error
+		kafkaConsumer *KafkaConsumer
+		kafkaProducer *KafkaProducer
+		err           error
 	)
-
-	decodedMessageChan := make(chan KafkaDecodedMessage, 0)
-
-	messageHandlerList := MessageHandlerList{}
+	stChan := make(chan sentTestingMessage)
+	messageHandlerList := NewMessageHandlerList()
 	topic := "topic-name"
 	groupId := "group-id"
 
@@ -42,12 +34,11 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 	}
 
 	setup := func() {
-		messageHandler = &messageHandlerMock{
-			HandleFunc: func(in1 KafkaDecodedMessage) error {
-				decodedMessageChan <- in1
-				return nil
-			},
-		}
+
+		messageHandler := NewHandler(func(ctx context.Context, s sentTestingMessage) error {
+			stChan <- s
+			return nil
+		})
 
 		messageHandlerList.AddHandler("sentTestingMessage", messageHandler)
 
@@ -74,10 +65,10 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 		defer tearDown()
 
 		msg := sentTestingMessage{
-			Id:   "testing-message-id",
+			ID:   "testing-message-id",
 			Name: "testing-message-name",
 		}
-		err = kafkaProducer.Send(topic, msg)
+		err = kafkaProducer.Send(topic, msg.ID, msg)
 		assert.NoError(err)
 
 		t.Run("When the consumer is started", func(t *testing.T) {
@@ -86,19 +77,11 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 				assert.NoError(err)
 			}()
 
-			t.Run("Then the message is consumed", func(t *testing.T) {
-				message := <-decodedMessageChan
-				assert.True(len(messageHandler.HandleCalls()) > 0)
+			t.Run("Then the message is consumed and the message information can be retrieved", func(t *testing.T) {
+				message := <-stChan
 
-				t.Run("And the message information can be retrieved", func(t *testing.T) {
-					var sent sentTestingMessage
-					err = mapstructure.Decode(message.Body, &sent)
-					assert.NoError(err)
-
-					assert.Equal("testing-message-id", sent.Id)
-					assert.Equal("testing-message-name", sent.Name)
-					assert.Equal("sentTestingMessage", message.MessageType)
-				})
+				assert.Equal("testing-message-id", message.ID)
+				assert.Equal("testing-message-name", message.Name)
 			})
 		})
 	})
