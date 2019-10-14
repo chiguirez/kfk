@@ -3,53 +3,61 @@ package kfk
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"os/signal"
 	"reflect"
-	"syscall"
-
-	"golang.org/x/sync/errgroup"
 
 	"github.com/Shopify/sarama"
+	"github.com/chiguirez/kfk/guard"
+	"github.com/tidwall/gjson"
+	"golang.org/x/sync/errgroup"
 )
 
-// Consumer
-
-type KafkaDecodedMessage struct {
-	Body        interface{} `json:"message_body"`
-	MessageType string      `json:"message_type"`
+type MessageHandler struct {
+	_type  reflect.Type
+	_value reflect.Value
 }
 
-//go:generate moq -out message_handler_mock.go . messageHandler
-type messageHandler interface {
-	Handle(KafkaDecodedMessage) error
+func NewHandler(handlerFunc interface{}) MessageHandler {
+	guard.MessageHandler(handlerFunc)
+	return MessageHandler{reflect.TypeOf(handlerFunc), reflect.ValueOf(handlerFunc)}
 }
 
-type MessageHandlerList map[string][]messageHandler
+func (m MessageHandler) Handle(ctx context.Context, msg []byte) error {
+	value := reflect.New(m._type.In(1)).Interface()
+	if err := json.Unmarshal(msg, value); err != nil {
+		return err
+	}
+	res := m._value.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(value).Elem()})
+	err, ok := res[0].Interface().(error)
+	if ok {
+		return err
+	}
+	return nil
+}
+
+type MessageHandlerList map[string][]MessageHandler
 
 func NewMessageHandlerList() MessageHandlerList {
 	return MessageHandlerList{}
 }
 
-func (l MessageHandlerList) AddHandler(messageType string, handler messageHandler) {
+func (l MessageHandlerList) AddHandler(messageType string, handler MessageHandler) {
 	l[messageType] = append(l[messageType], handler)
 }
 
-func (l MessageHandlerList) Handle(decodedMessage KafkaDecodedMessage) error {
-	handlers := l[decodedMessage.MessageType]
-	if len(handlers) == 0 {
+func (l MessageHandlerList) Handle(ctx context.Context, message []byte) error {
+	handlers, ok := l[gjson.ParseBytes(message).Get("@type").String()]
+	if len(handlers) == 0 || !ok {
 		return nil
 	}
-
-	errGroup := errgroup.Group{}
+	g, _ := errgroup.WithContext(ctx)
 
 	for _, handler := range handlers {
-		errGroup.Go(func() error {
-			return handler.Handle(decodedMessage)
+		g.Go(func() error {
+			return handler.Handle(ctx, message)
 		})
 	}
 
-	return errGroup.Wait()
+	return g.Wait()
 }
 
 type KafkaConsumer struct {
@@ -74,7 +82,7 @@ func NewKafkaConsumer(
 	}
 
 	consumer := consumer{
-		ready:       make(chan bool, 0),
+		ready:       make(chan bool),
 		handlerList: handlerList,
 		topics:      topics,
 	}
@@ -86,36 +94,23 @@ func NewKafkaConsumer(
 }
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
-	ctx, ctxCancel := context.WithCancel(ctx)
-
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		for {
+	defer func() {
+		_ = c.consumerGroup.Close()
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			if ctx.Err() != context.Canceled {
+				return ctx.Err()
+			}
+			return nil
+		default:
 			if err := c.consumerGroup.Consume(ctx, c.consumer.topics, &c.consumer); err != nil {
 				return err
 			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			c.consumer.ready = make(chan bool, 0)
+			c.consumer.ready = make(chan bool)
 		}
-	})
-
-	<-c.consumer.ready
-
-	sigterm := make(chan os.Signal, 1)
-	signal.Notify(sigterm, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-ctx.Done():
-	case <-sigterm:
 	}
-
-	ctxCancel()
-	if err := g.Wait(); err != nil {
-		return err
-	}
-
-	return c.consumerGroup.Close()
 }
 
 type consumer struct {
@@ -135,78 +130,8 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		var decodedMessage KafkaDecodedMessage
-		if err := json.Unmarshal(message.Value, &decodedMessage); err != nil {
-			return err
-		}
-
-		_ = c.handlerList.Handle(decodedMessage)
-		defer session.MarkMessage(message, "")
+		_ = c.handlerList.Handle(session.Context(), message.Value)
+		session.MarkMessage(message, "")
 	}
-
 	return nil
-}
-
-// Producer
-
-type KafkaProducer struct {
-	// TODO add async producer
-	producer sarama.SyncProducer
-}
-
-func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
-	kafkaCfg := sarama.NewConfig()
-	kafkaCfg.Consumer.Return.Errors = true
-	kafkaCfg.Version = sarama.V1_0_0_0
-	kafkaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
-	kafkaCfg.Producer.Return.Successes = true
-
-	producer, err := sarama.NewSyncProducer(kafkaBrokers, kafkaCfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return &KafkaProducer{producer}, nil
-}
-
-type Message interface {
-	ID() string
-}
-
-type typedMessage struct {
-	Message     `json:"message_body"`
-	MessageType string `json:"message_type"`
-}
-
-func (tm typedMessage) Raw() []byte {
-	raw, _ := json.Marshal(tm)
-
-	return raw
-}
-
-func (tm typedMessage) ID() string {
-	return tm.Message.ID()
-}
-
-func (p *KafkaProducer) Send(topic string, message Message) error {
-	typedMessage := typedMessage{message, messageType(message)}
-
-	producerMessage := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(typedMessage.Raw()),
-		Key:   sarama.ByteEncoder([]byte(typedMessage.ID())),
-	}
-	_, _, err := p.producer.SendMessage(producerMessage)
-
-	return err
-}
-
-// TODO this responsibility should be in a different service
-func messageType(m Message) string {
-	rType := reflect.TypeOf(m)
-	if rType.Kind() == reflect.Ptr {
-		return rType.Elem().Name()
-	}
-
-	return rType.Name()
 }
