@@ -24,7 +24,6 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 		err           error
 	)
 	stChan := make(chan sentTestingMessage)
-	messageHandlerList := NewMessageHandlerList()
 	topic := "topic-name"
 	groupId := "group-id"
 
@@ -40,15 +39,14 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 			return nil
 		})
 
-		messageHandlerList.AddHandler("sentTestingMessage", messageHandler)
-
 		kafkaConsumer, err = NewKafkaConsumer(
 			[]string{kafkaBroker},
 			groupId,
-			messageHandlerList,
 			[]string{topic},
 		)
 		assert.NoError(err)
+
+		kafkaConsumer.AddHandler("sentTestingMessage", messageHandler)
 
 		kafkaProducer, err = NewKafkaProducer([]string{kafkaBroker})
 		assert.NoError(err)
