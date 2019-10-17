@@ -34,17 +34,13 @@ func (m MessageHandler) Handle(ctx context.Context, msg []byte) error {
 	return nil
 }
 
-type MessageHandlerList map[string][]MessageHandler
+type messageHandlerList map[string][]MessageHandler
 
-func NewMessageHandlerList() MessageHandlerList {
-	return MessageHandlerList{}
-}
-
-func (l MessageHandlerList) AddHandler(messageType string, handler MessageHandler) {
+func (l messageHandlerList) AddHandler(messageType string, handler MessageHandler) {
 	l[messageType] = append(l[messageType], handler)
 }
 
-func (l MessageHandlerList) Handle(ctx context.Context, message []byte) error {
+func (l messageHandlerList) Handle(ctx context.Context, message []byte) error {
 	handlers, ok := l[gjson.ParseBytes(message).Get("@type").String()]
 	if len(handlers) == 0 || !ok {
 		return nil
@@ -68,7 +64,6 @@ type KafkaConsumer struct {
 func NewKafkaConsumer(
 	kafkaBrokers []string,
 	consumerGroupID string,
-	handlerList MessageHandlerList,
 	topics []string,
 ) (*KafkaConsumer, error) {
 	kafkaCfg := sarama.NewConfig()
@@ -83,7 +78,7 @@ func NewKafkaConsumer(
 
 	consumer := consumer{
 		ready:       make(chan bool),
-		handlerList: handlerList,
+		handlerList: messageHandlerList{},
 		topics:      topics,
 	}
 
@@ -91,6 +86,10 @@ func NewKafkaConsumer(
 		consumer:      consumer,
 		consumerGroup: consumerGroup,
 	}, nil
+}
+
+func (c *KafkaConsumer) AddHandler(messageType string, handler MessageHandler) {
+	c.consumer.handlerList.AddHandler(messageType, handler)
 }
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
@@ -115,7 +114,7 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 
 type consumer struct {
 	ready       chan bool
-	handlerList MessageHandlerList
+	handlerList messageHandlerList
 	topics      []string
 }
 
