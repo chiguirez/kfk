@@ -7,7 +7,6 @@ import (
 
 	"github.com/Shopify/sarama"
 	"github.com/chiguirez/kfk/guard"
-	"github.com/tidwall/gjson"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -40,8 +39,8 @@ func (l messageHandlerList) AddHandler(messageType string, handler MessageHandle
 	l[messageType] = append(l[messageType], handler)
 }
 
-func (l messageHandlerList) Handle(ctx context.Context, message []byte) error {
-	handlers, ok := l[gjson.ParseBytes(message).Get("@type").String()]
+func (l messageHandlerList) Handle(ctx context.Context, message *sarama.ConsumerMessage) error {
+	handlers, ok := l[getTypeFromHeader(message)]
 	if len(handlers) == 0 || !ok {
 		return nil
 	}
@@ -49,7 +48,7 @@ func (l messageHandlerList) Handle(ctx context.Context, message []byte) error {
 
 	for _, handler := range handlers {
 		g.Go(func() error {
-			return handler.Handle(ctx, message)
+			return handler.Handle(ctx, message.Value)
 		})
 	}
 
@@ -129,8 +128,17 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		_ = c.handlerList.Handle(session.Context(), message.Value)
+		_ = c.handlerList.Handle(session.Context(), message)
 		session.MarkMessage(message, "")
 	}
 	return nil
+}
+
+func getTypeFromHeader(message *sarama.ConsumerMessage) string {
+	for _, h := range message.Headers {
+		if string(h.Key) == "@type" {
+			return string(h.Value)
+		}
+	}
+	return ""
 }

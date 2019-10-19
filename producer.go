@@ -30,32 +30,27 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 
 // Send a message to a topic to be scattered using the key
 func (p *KafkaProducer) Send(topic string, key string, message interface{}) error {
-	bytes, err := typeMessage(message)
+	bytes, err := json.Marshal(message)
 	if err != nil {
 		return err
 	}
 
 	producerMessage := &sarama.ProducerMessage{
-		Topic: topic,
-		Value: sarama.ByteEncoder(bytes),
-		Key:   sarama.ByteEncoder([]byte(key)),
+		Topic:   topic,
+		Value:   sarama.ByteEncoder(bytes),
+		Key:     sarama.ByteEncoder([]byte(key)),
+		Headers: []sarama.RecordHeader{messageTypeHeader(message)},
 	}
 	_, _, err = p.producer.SendMessage(producerMessage)
 
 	return err
 }
 
-func typeMessage(message interface{}) ([]byte, error) {
-	bytes, err := json.Marshal(message)
-	if err != nil {
-		return nil, err
+func messageTypeHeader(message interface{}) sarama.RecordHeader {
+	return sarama.RecordHeader{
+		Key:   []byte("@type"),
+		Value: []byte(messageType(message)),
 	}
-	var mappedMessage map[string]interface{}
-	if err = json.Unmarshal(bytes, &mappedMessage); err != nil {
-		return nil, err
-	}
-	mappedMessage["@type"] = messageType(message)
-	return json.Marshal(mappedMessage)
 }
 
 func messageType(m interface{}) string {
