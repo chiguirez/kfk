@@ -3,6 +3,8 @@ package kfk
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"reflect"
 
 	"github.com/Shopify/sarama"
@@ -14,6 +16,8 @@ type MessageHandler struct {
 	_type  reflect.Type
 	_value reflect.Value
 }
+
+type FallbackFunc func(context.Context, []byte) error
 
 func NewHandler(handlerFunc interface{}) MessageHandler {
 	guard.MessageHandler(handlerFunc)
@@ -39,10 +43,13 @@ func (l messageHandlerList) AddHandler(messageType string, handler MessageHandle
 	l[messageType] = append(l[messageType], handler)
 }
 
+var handlerNotFound = errors.New("handler not found")
+
 func (l messageHandlerList) Handle(ctx context.Context, message *sarama.ConsumerMessage) error {
-	handlers, ok := l[getTypeFromHeader(message)]
+	headerType := getTypeFromHeader(message)
+	handlers, ok := l[headerType]
 	if len(handlers) == 0 || !ok {
-		return nil
+		return fmt.Errorf("%w for message %s", handlerNotFound, headerType)
 	}
 	g, _ := errgroup.WithContext(ctx)
 
@@ -91,6 +98,10 @@ func (c *KafkaConsumer) AddHandler(messageType string, handler MessageHandler) {
 	c.consumer.handlerList.AddHandler(messageType, handler)
 }
 
+func (c *KafkaConsumer) AddFallback(fn FallbackFunc) {
+	c.consumer.fallbackHandler = fn
+}
+
 func (c *KafkaConsumer) Start(ctx context.Context) error {
 	defer func() {
 		_ = c.consumerGroup.Close()
@@ -112,9 +123,10 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 }
 
 type consumer struct {
-	ready       chan bool
-	handlerList messageHandlerList
-	topics      []string
+	ready           chan bool
+	handlerList     messageHandlerList
+	topics          []string
+	fallbackHandler FallbackFunc
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
@@ -128,7 +140,10 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
-		_ = c.handlerList.Handle(session.Context(), message)
+		err := c.handlerList.Handle(session.Context(), message)
+		if errors.Is(err, handlerNotFound) && c.fallbackHandler != nil {
+			_ = c.fallbackHandler(session.Context(), message.Value)
+		}
 		session.MarkMessage(message, "")
 	}
 	return nil
