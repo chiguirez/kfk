@@ -8,7 +8,7 @@ import (
 	"reflect"
 
 	"github.com/Shopify/sarama"
-	"github.com/chiguirez/kfk/guard"
+	"github.com/chiguirez/kfk/v2/guard"
 	"golang.org/x/sync/errgroup"
 )
 
