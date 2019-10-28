@@ -3,10 +3,13 @@ package kfk
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Shopify/sarama"
 	"github.com/stretchr/testify/require"
 	"github.com/wvanbergen/kazoo-go"
 )
@@ -163,5 +166,80 @@ func TestKafkaFallbackConsume(t *testing.T) {
 				assert.Equal("testing-message-name", message.Name)
 			})
 		})
+	})
+}
+
+type CustomEncodingDecodingMessage struct {
+	id   string
+	name string
+}
+
+func (c *CustomEncodingDecodingMessage) UnmarshalKFK(data []byte) error {
+	s := string(data)
+	split := strings.Split(s, ";")
+	c.id = split[0]
+	c.name = split[1]
+	return nil
+}
+
+func (c CustomEncodingDecodingMessage) MarshalKFK() ([]byte, error) {
+	customEncoding := fmt.Sprintf("%s;%s", c.id, c.name)
+	return []byte(customEncoding), nil
+}
+
+func TestCustomEncodeDecode(t *testing.T) {
+
+	topic := "topic-name-with-custom-encoding"
+	groupId := "group-id"
+
+	kafkaBroker := os.Getenv("KAFKA_BROKER")
+	if kafkaBroker == "" {
+		kafkaBroker = "localhost:9092"
+	}
+	config := sarama.NewConfig()
+	config.Version = sarama.V1_0_0_0
+	clusterAdmin, err := sarama.NewClusterAdmin([]string{kafkaBroker}, config)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	kafkaConsumer, err := NewKafkaConsumer(
+		[]string{kafkaBroker},
+		groupId,
+		[]string{topic},
+	)
+	require.NoError(t, err)
+
+	messageChan := make(chan CustomEncodingDecodingMessage)
+
+	kafkaConsumer.AddHandler(
+		"CustomEncodingDecodingMessage",
+		NewHandler(func(ctx context.Context, message CustomEncodingDecodingMessage) error {
+			cancel()
+			go func() {
+				messageChan <- message
+			}()
+			return nil
+		}))
+
+	kafkaProducer, err := NewKafkaProducer([]string{kafkaBroker})
+	require.NoError(t, err)
+
+	t.Run("Given a message with Marshall and Unmarshall", func(t *testing.T) {
+		message := CustomEncodingDecodingMessage{
+			id:   "testing-message-id",
+			name: "testing-message-name",
+		}
+		t.Run("When send using producer", func(t *testing.T) {
+			err := kafkaProducer.Send(topic, message.id, message)
+			require.NoError(t, err)
+			t.Run("Then is received with custom changes from the coding/encoding", func(t *testing.T) {
+				err := kafkaConsumer.Start(ctx)
+				require.NoError(t, err)
+				require.Equal(t, message, <-messageChan)
+			})
+		})
+		_ = clusterAdmin.DeleteTopic(topic)
+		_ = clusterAdmin.DeleteConsumerGroup(groupId)
 	})
 }
