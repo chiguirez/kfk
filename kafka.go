@@ -26,7 +26,7 @@ func NewHandler(handlerFunc interface{}) MessageHandler {
 
 func (m MessageHandler) Handle(ctx context.Context, msg []byte) error {
 	value := reflect.New(m._type.In(1)).Interface()
-	if err := json.Unmarshal(msg, value); err != nil {
+	if err := m.decode(msg, value); err != nil {
 		return err
 	}
 	res := m._value.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(value).Elem()})
@@ -35,6 +35,18 @@ func (m MessageHandler) Handle(ctx context.Context, msg []byte) error {
 		return err
 	}
 	return nil
+}
+
+type Unmarshaler interface {
+	UnmarshalKFK([]byte) error
+}
+
+func (m MessageHandler) decode(msg []byte, value interface{}) error {
+	unmarshaler, ok := value.(Unmarshaler)
+	if ok {
+		return unmarshaler.UnmarshalKFK(msg)
+	}
+	return json.Unmarshal(msg, value)
 }
 
 type messageHandlerList map[string][]MessageHandler
