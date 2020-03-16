@@ -79,15 +79,28 @@ type KafkaConsumer struct {
 	consumer      consumer
 }
 
+type ConsumerCfgOption func(config *sarama.Config)
+
+func FromNewest() ConsumerCfgOption {
+	return func(config *sarama.Config) {
+		config.Consumer.Offsets.Initial = sarama.OffsetNewest
+	}
+}
+
 func NewKafkaConsumer(
 	kafkaBrokers []string,
 	consumerGroupID string,
 	topics []string,
+	cfgOptions ...ConsumerCfgOption,
 ) (*KafkaConsumer, error) {
 	kafkaCfg := sarama.NewConfig()
 	kafkaCfg.Consumer.Return.Errors = true
 	kafkaCfg.Version = sarama.V1_0_0_0
 	kafkaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
+
+	for _, opt := range cfgOptions {
+		opt(kafkaCfg)
+	}
 
 	consumerGroup, err := sarama.NewConsumerGroup(kafkaBrokers, consumerGroupID, kafkaCfg)
 	if err != nil {
