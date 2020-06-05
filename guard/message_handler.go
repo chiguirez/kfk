@@ -32,15 +32,19 @@ func MessageHandler(handlerFunc interface{}) {
 	if !IsAFunc(handlerFunc) {
 		panic("handler should be a func")
 	}
+
 	if !HaveTwoAttributes(handlerFunc) {
 		panic("handler input params should be a ctx and a message")
 	}
+
 	if !IsACtx(handlerFunc, 0) {
 		panic("first attribute of the handler should be a context")
 	}
+
 	if !IsAStruct(handlerFunc, 1) {
 		panic("second attribute of the handler should be a struct message")
 	}
+
 	if !FuncReturnError(handlerFunc) {
 		panic("handler output should be of type error")
 	}

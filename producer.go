@@ -1,18 +1,20 @@
 package kfk
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 
 	"github.com/Shopify/sarama"
 )
 
-// Producer
+// Producer.
 type KafkaProducer struct {
 	producer sarama.SyncProducer
+	client   sarama.Client
 }
 
-// NewKafkaProducer
+// NewKafkaProducer.
 func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 	kafkaCfg := sarama.NewConfig()
 	kafkaCfg.Consumer.Return.Errors = true
@@ -20,15 +22,20 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 	kafkaCfg.Consumer.Offsets.Initial = sarama.OffsetOldest
 	kafkaCfg.Producer.Return.Successes = true
 
-	producer, err := sarama.NewSyncProducer(kafkaBrokers, kafkaCfg)
+	kafkaClient, err := sarama.NewClient(kafkaBrokers, kafkaCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	return &KafkaProducer{producer}, nil
+	producer, err := sarama.NewSyncProducerFromClient(kafkaClient)
+	if err != nil {
+		return nil, err
+	}
+
+	return &KafkaProducer{producer: producer, client: kafkaClient}, nil
 }
 
-// Send a message to a topic to be scattered using the key
+// Send a message to a topic to be scattered using the key.
 func (p *KafkaProducer) Send(topic string, key string, message interface{}) error {
 	bytes, err := p.encode(message)
 	if err != nil {
@@ -38,7 +45,7 @@ func (p *KafkaProducer) Send(topic string, key string, message interface{}) erro
 	producerMessage := &sarama.ProducerMessage{
 		Topic:   topic,
 		Value:   sarama.ByteEncoder(bytes),
-		Key:     sarama.ByteEncoder([]byte(key)),
+		Key:     sarama.ByteEncoder(key),
 		Headers: []sarama.RecordHeader{messageTypeHeader(message)},
 	}
 	_, _, err = p.producer.SendMessage(producerMessage)
@@ -46,15 +53,21 @@ func (p *KafkaProducer) Send(topic string, key string, message interface{}) erro
 	return err
 }
 
-type Marshaler interface {
+func (p KafkaProducer) Check(_ context.Context) bool {
+	return !p.client.Closed()
+}
+
+// Marshaller is an interface to serialize messages to kfkTopics.
+type Marshaller interface {
 	MarshalKFK() ([]byte, error)
 }
 
 func (p *KafkaProducer) encode(message interface{}) ([]byte, error) {
-	marshall, ok := message.(Marshaler)
+	marshall, ok := message.(Marshaller)
 	if ok {
 		return marshall.MarshalKFK()
 	}
+
 	return json.Marshal(message)
 }
 

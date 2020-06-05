@@ -65,7 +65,7 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 		_ = newKazoo.Consumergroup(groupId).Delete()
 	}
 
-	t.Run("Given a message is sent to kafka topic", func(t *testing.T) {
+	t.Run("Given a producer and a message is sent to kafka topic", func(t *testing.T) {
 		setup()
 		defer tearDown()
 
@@ -87,6 +87,13 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 
 				assert.Equal("testing-message-id", message.ID)
 				assert.Equal("testing-message-name", message.Name)
+			})
+		})
+
+		t.Run("When check", func(t *testing.T) {
+			t.Run("Then is ok", func(t *testing.T) {
+				check := kafkaProducer.Check(context.Background())
+				assert.True(check)
 			})
 		})
 	})
@@ -142,7 +149,7 @@ func TestKafkaFallbackConsume(t *testing.T) {
 		cancel()
 	}
 
-	t.Run("Given a message is sent to kafka topic", func(t *testing.T) {
+	t.Run("Given a valid consumer and a message is sent to kafka topic", func(t *testing.T) {
 		setup()
 		defer tearDown()
 
@@ -166,6 +173,10 @@ func TestKafkaFallbackConsume(t *testing.T) {
 				assert.Equal("testing-message-name", message.Name)
 			})
 		})
+
+		t.Run("When Checked then is ok", func(t *testing.T) {
+			assert.True(kafkaConsumer.Check(context.Background()))
+		})
 	})
 }
 
@@ -174,7 +185,7 @@ type CustomEncodingDecodingMessage struct {
 	name string
 }
 
-func (c *CustomEncodingDecodingMessage) UnmarshalKFK(data []byte) error {
+func (c *CustomEncodingDecodingMessage) UnmarshallKFK(data []byte) error {
 	s := string(data)
 	split := strings.Split(s, ";")
 	c.id = split[0]

@@ -29,23 +29,27 @@ func (m MessageHandler) Handle(ctx context.Context, msg []byte) error {
 	if err := m.decode(msg, value); err != nil {
 		return err
 	}
+
 	res := m._value.Call([]reflect.Value{reflect.ValueOf(ctx), reflect.ValueOf(value).Elem()})
+
 	err, ok := res[0].Interface().(error)
 	if ok {
 		return err
 	}
+
 	return nil
 }
 
-type Unmarshaler interface {
-	UnmarshalKFK([]byte) error
+type Unmarshaller interface {
+	UnmarshallKFK([]byte) error
 }
 
 func (m MessageHandler) decode(msg []byte, value interface{}) error {
-	unmarshaler, ok := value.(Unmarshaler)
+	unmarshaller, ok := value.(Unmarshaller)
 	if ok {
-		return unmarshaler.UnmarshalKFK(msg)
+		return unmarshaller.UnmarshallKFK(msg)
 	}
+
 	return json.Unmarshal(msg, value)
 }
 
@@ -55,20 +59,26 @@ func (l messageHandlerList) AddHandler(messageType string, handler MessageHandle
 	l[messageType] = append(l[messageType], handler)
 }
 
-var handlerNotFound = errors.New("handler not found")
+var errHandlerNotFound = errors.New("handler not found")
 
 func (l messageHandlerList) Handle(ctx context.Context, message *sarama.ConsumerMessage) error {
 	headerType := getTypeFromHeader(message)
+
 	handlers, ok := l[headerType]
 	if len(handlers) == 0 || !ok {
-		return fmt.Errorf("%w for message %s", handlerNotFound, headerType)
+		return fmt.Errorf("%w for message %s", errHandlerNotFound, headerType)
 	}
+
 	g, _ := errgroup.WithContext(ctx)
 
 	for _, handler := range handlers {
-		g.Go(func() error {
-			return handler.Handle(ctx, message.Value)
-		})
+		g.Go(
+			func(handler MessageHandler) func() error {
+				return func() error {
+					return handler.Handle(ctx, message.Value)
+				}
+			}(handler),
+		)
 	}
 
 	return g.Wait()
@@ -77,6 +87,7 @@ func (l messageHandlerList) Handle(ctx context.Context, message *sarama.Consumer
 type KafkaConsumer struct {
 	consumerGroup sarama.ConsumerGroup
 	consumer      consumer
+	client        sarama.Client
 }
 
 type ConsumerCfgOption func(config *sarama.Config)
@@ -102,7 +113,12 @@ func NewKafkaConsumer(
 		opt(kafkaCfg)
 	}
 
-	consumerGroup, err := sarama.NewConsumerGroup(kafkaBrokers, consumerGroupID, kafkaCfg)
+	client, err := sarama.NewClient(kafkaBrokers, kafkaCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	consumerGroup, err := sarama.NewConsumerGroupFromClient(consumerGroupID, client)
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +132,7 @@ func NewKafkaConsumer(
 	return &KafkaConsumer{
 		consumer:      consumer,
 		consumerGroup: consumerGroup,
+		client:        client,
 	}, nil
 }
 
@@ -131,20 +148,27 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 	defer func() {
 		_ = c.consumerGroup.Close()
 	}()
+
 	for {
 		select {
 		case <-ctx.Done():
-			if ctx.Err() != context.Canceled {
+			if !errors.Is(ctx.Err(), context.Canceled) {
 				return ctx.Err()
 			}
+
 			return nil
 		default:
 			if err := c.consumerGroup.Consume(ctx, c.consumer.topics, &c.consumer); err != nil {
 				return err
 			}
+
 			c.consumer.ready = make(chan bool)
 		}
 	}
+}
+
+func (c *KafkaConsumer) Check(_ context.Context) bool {
+	return !c.client.Closed()
 }
 
 type consumer struct {
@@ -166,11 +190,13 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for message := range claim.Messages() {
 		err := c.handlerList.Handle(session.Context(), message)
-		if errors.Is(err, handlerNotFound) && c.fallbackHandler != nil {
+		if errors.Is(err, errHandlerNotFound) && c.fallbackHandler != nil {
 			_ = c.fallbackHandler(session.Context(), message.Value)
 		}
+
 		session.MarkMessage(message, "")
 	}
+
 	return nil
 }
 
@@ -180,5 +206,6 @@ func getTypeFromHeader(message *sarama.ConsumerMessage) string {
 			return string(h.Value)
 		}
 	}
+
 	return ""
 }
