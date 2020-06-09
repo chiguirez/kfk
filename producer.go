@@ -53,7 +53,7 @@ func (p *KafkaProducer) Send(topic string, key string, message interface{}) erro
 	return err
 }
 
-func (p KafkaProducer) Check(_ context.Context) bool {
+func (p KafkaProducer) HealthCheck(_ context.Context) bool {
 	controller, err := p.client.Controller()
 	if err != nil {
 		return false
