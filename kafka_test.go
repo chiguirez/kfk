@@ -175,7 +175,7 @@ func TestKafkaFallbackConsume(t *testing.T) {
 		})
 
 		t.Run("When Checked then is ok", func(t *testing.T) {
-			assert.True(kafkaConsumer.Check(context.Background()))
+			assert.True(kafkaConsumer.HealthCheck(context.Background()))
 		})
 	})
 }
