@@ -92,7 +92,7 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 
 		t.Run("When check", func(t *testing.T) {
 			t.Run("Then is ok", func(t *testing.T) {
-				check := kafkaProducer.Check(context.Background())
+				check := kafkaProducer.HealthCheck(context.Background())
 				assert.True(check)
 			})
 		})
