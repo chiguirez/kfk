@@ -54,7 +54,15 @@ func (p *KafkaProducer) Send(topic string, key string, message interface{}) erro
 }
 
 func (p KafkaProducer) Check(_ context.Context) bool {
-	return !p.client.Closed()
+	controller, err := p.client.Controller()
+	if err != nil {
+		return false
+	}
+	connected, err := controller.Connected()
+	if err != nil {
+		return false
+	}
+	return connected
 }
 
 // Marshaller is an interface to serialize messages to kfkTopics.

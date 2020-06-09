@@ -168,7 +168,15 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 }
 
 func (c *KafkaConsumer) Check(_ context.Context) bool {
-	return !c.client.Closed()
+	controller, err := c.client.Controller()
+	if err != nil {
+		return false
+	}
+	connected, err := controller.Connected()
+	if err != nil {
+		return false
+	}
+	return connected
 }
 
 type consumer struct {
