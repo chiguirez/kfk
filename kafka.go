@@ -167,7 +167,7 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 	}
 }
 
-func (c *KafkaConsumer) Check(_ context.Context) bool {
+func (c *KafkaConsumer) HealthCheck(_ context.Context) bool {
 	controller, err := c.client.Controller()
 	if err != nil {
 		return false
