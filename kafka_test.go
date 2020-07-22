@@ -14,55 +14,66 @@ import (
 	"github.com/wvanbergen/kazoo-go"
 )
 
+const (
+	broker  = "localhost:9092"
+	groupID = "group-id"
+)
+
 type sentTestingMessage struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
 func TestKafkaProduceAndConsume(t *testing.T) {
-	assert := require.New(t)
-
 	var (
 		kafkaConsumer *KafkaConsumer
 		kafkaProducer *KafkaProducer
 		err           error
 	)
+
 	stChan := make(chan sentTestingMessage)
+	topicChan := make(chan string)
 	topic := "topic-name"
-	groupId := "group-id"
+	groupID := groupID
 
 	kafkaBroker := os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "localhost:9092"
+		kafkaBroker = broker
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	setup := func() {
-
 		messageHandler := NewHandler(func(ctx context.Context, s sentTestingMessage) error {
 			stChan <- s
+			topicFromContext, _ := TopicFromContext(ctx)
+			topicChan <- topicFromContext
 			return nil
 		})
 
 		kafkaConsumer, err = NewKafkaConsumer(
 			[]string{kafkaBroker},
-			groupId,
+			groupID,
 			[]string{topic},
 		)
-		assert.NoError(err)
+		require.NoError(t, err)
 
 		kafkaConsumer.AddHandler("sentTestingMessage", messageHandler)
 
 		kafkaProducer, err = NewKafkaProducer([]string{kafkaBroker})
-		assert.NoError(err)
+		require.NoError(t, err)
 	}
 
 	tearDown := func() {
 		cancel()
-		newKazoo, _ := kazoo.NewKazoo([]string{"localhost:2181"}, nil)
-		_ = newKazoo.DeleteTopicSync(topic, time.Second*5)
-		_ = newKazoo.Consumergroup(groupId).Delete()
+
+		config := sarama.NewConfig()
+		config.Version = sarama.V1_1_0_0
+		admin, err := sarama.NewClusterAdmin([]string{broker}, config)
+		require.NoError(t, err)
+
+		_ = admin.DeleteTopic(topic)
+		_ = admin.DeleteConsumerGroup(groupID)
 	}
 
 	t.Run("Given a producer and a message is sent to kafka topic", func(t *testing.T) {
@@ -74,78 +85,82 @@ func TestKafkaProduceAndConsume(t *testing.T) {
 			Name: "testing-message-name",
 		}
 		err = kafkaProducer.Send(topic, msg.ID, msg)
-		assert.NoError(err)
+		require.NoError(t, err)
 
 		t.Run("When the consumer is started", func(t *testing.T) {
 			go func() {
 				err = kafkaConsumer.Start(ctx)
-				assert.NoError(err)
+				require.NoError(t, err)
 			}()
 
 			t.Run("Then the message is consumed and the message information can be retrieved", func(t *testing.T) {
 				message := <-stChan
 
-				assert.Equal("testing-message-id", message.ID)
-				assert.Equal("testing-message-name", message.Name)
+				require.Equal(t, "testing-message-id", message.ID)
+				require.Equal(t, "testing-message-name", message.Name)
+			})
+
+			t.Run("and Topic information can be retrieved too out of the context", func(t *testing.T) {
+				require.Equal(t, topic, <-topicChan)
 			})
 		})
 
 		t.Run("When check", func(t *testing.T) {
 			t.Run("Then is ok", func(t *testing.T) {
 				check := kafkaProducer.HealthCheck(context.Background())
-				assert.True(check)
+				require.True(t, check)
 			})
 		})
 	})
 }
 
 func TestKafkaFallbackConsume(t *testing.T) {
-	assert := require.New(t)
-
 	var (
 		kafkaConsumer *KafkaConsumer
 		kafkaProducer *KafkaProducer
 		err           error
 	)
+
 	stChan := make(chan sentTestingMessage)
 	topic := "topic-name-with-fallback"
-	groupId := "group-id"
+	groupID := groupID
 
 	kafkaBroker := os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "localhost:9092"
+		kafkaBroker = broker
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	setup := func() {
-
 		messageHandler := func(ctx context.Context, s []byte) error {
 			message := &sentTestingMessage{}
 			if err := json.Unmarshal(s, message); err != nil {
 				return err
 			}
 			stChan <- *message
+
 			return nil
 		}
 
 		kafkaConsumer, err = NewKafkaConsumer(
 			[]string{kafkaBroker},
-			groupId,
+			groupID,
 			[]string{topic},
 		)
-		assert.NoError(err)
+		require.NoError(t, err)
 
 		kafkaConsumer.AddFallback(messageHandler)
 
 		kafkaProducer, err = NewKafkaProducer([]string{kafkaBroker})
-		assert.NoError(err)
+		require.NoError(t, err)
 	}
 
 	tearDown := func() {
 		newKazoo, _ := kazoo.NewKazoo([]string{"localhost:2181"}, nil)
 		_ = newKazoo.DeleteTopicSync(topic, time.Second*5)
-		_ = newKazoo.Consumergroup(groupId).Delete()
+		_ = newKazoo.Consumergroup(groupID).Delete()
+
 		cancel()
 	}
 
@@ -158,24 +173,24 @@ func TestKafkaFallbackConsume(t *testing.T) {
 			Name: "testing-message-name",
 		}
 		err = kafkaProducer.Send(topic, msg.ID, msg)
-		assert.NoError(err)
+		require.NoError(t, err)
 
 		t.Run("When the consumer is started", func(t *testing.T) {
 			go func() {
 				err = kafkaConsumer.Start(ctx)
-				assert.NoError(err)
+				require.NoError(t, err)
 			}()
 
 			t.Run("Then the message is consumed by the fallback and the message information can be retrieved", func(t *testing.T) {
 				message := <-stChan
 
-				assert.Equal("testing-message-id", message.ID)
-				assert.Equal("testing-message-name", message.Name)
+				require.Equal(t, "testing-message-id", message.ID)
+				require.Equal(t, "testing-message-name", message.Name)
 			})
 		})
 
 		t.Run("When Checked then is ok", func(t *testing.T) {
-			assert.True(kafkaConsumer.HealthCheck(context.Background()))
+			require.True(t, kafkaConsumer.HealthCheck(context.Background()))
 		})
 	})
 }
@@ -190,6 +205,7 @@ func (c *CustomEncodingDecodingMessage) UnmarshallKFK(data []byte) error {
 	split := strings.Split(s, ";")
 	c.id = split[0]
 	c.name = split[1]
+
 	return nil
 }
 
@@ -199,15 +215,16 @@ func (c CustomEncodingDecodingMessage) MarshalKFK() ([]byte, error) {
 }
 
 func TestCustomEncodeDecode(t *testing.T) {
-
 	topic := "topic-name-with-custom-encoding"
-	groupId := "group-id"
+	groupID := groupID
 
 	kafkaBroker := os.Getenv("KAFKA_BROKER")
 	if kafkaBroker == "" {
-		kafkaBroker = "localhost:9092"
+		kafkaBroker = broker
 	}
+
 	config := sarama.NewConfig()
+
 	config.Version = sarama.V1_0_0_0
 	clusterAdmin, err := sarama.NewClusterAdmin([]string{kafkaBroker}, config)
 	require.NoError(t, err)
@@ -216,7 +233,7 @@ func TestCustomEncodeDecode(t *testing.T) {
 
 	kafkaConsumer, err := NewKafkaConsumer(
 		[]string{kafkaBroker},
-		groupId,
+		groupID,
 		[]string{topic},
 	)
 	require.NoError(t, err)
@@ -251,6 +268,6 @@ func TestCustomEncodeDecode(t *testing.T) {
 			})
 		})
 		_ = clusterAdmin.DeleteTopic(topic)
-		_ = clusterAdmin.DeleteConsumerGroup(groupId)
+		_ = clusterAdmin.DeleteConsumerGroup(groupID)
 	})
 }

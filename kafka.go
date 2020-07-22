@@ -8,8 +8,9 @@ import (
 	"reflect"
 
 	"github.com/Shopify/sarama"
-	"github.com/chiguirez/kfk/v2/guard"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/chiguirez/kfk/v2/guard"
 )
 
 type MessageHandler struct {
@@ -172,10 +173,12 @@ func (c *KafkaConsumer) HealthCheck(_ context.Context) bool {
 	if err != nil {
 		return false
 	}
+
 	connected, err := controller.Connected()
 	if err != nil {
 		return false
 	}
+
 	return connected
 }
 
@@ -195,11 +198,25 @@ func (c *consumer) Cleanup(sarama.ConsumerGroupSession) error {
 	return nil
 }
 
+type contextKey string
+
+func TopicFromContext(ctx context.Context) (string, bool) {
+	ContextTopic := contextKey("Topic")
+
+	topic, ok := ctx.Value(ContextTopic).(string)
+
+	return topic, ok
+}
+
 func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	ContextTopic := contextKey("Topic")
+
 	for message := range claim.Messages() {
-		err := c.handlerList.Handle(session.Context(), message)
+		ctx := context.WithValue(session.Context(), ContextTopic, message.Topic)
+
+		err := c.handlerList.Handle(ctx, message)
 		if errors.Is(err, errHandlerNotFound) && c.fallbackHandler != nil {
-			_ = c.fallbackHandler(session.Context(), message.Value)
+			_ = c.fallbackHandler(ctx, message.Value)
 		}
 
 		session.MarkMessage(message, "")
