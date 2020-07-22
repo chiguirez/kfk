@@ -36,7 +36,7 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 }
 
 // Send a message to a topic to be scattered using the key.
-func (p *KafkaProducer) Send(topic string, key string, message interface{}) error {
+func (p *KafkaProducer) Send(topic, key string, message interface{}) error {
 	bytes, err := p.encode(message)
 	if err != nil {
 		return err
@@ -58,10 +58,12 @@ func (p KafkaProducer) HealthCheck(_ context.Context) bool {
 	if err != nil {
 		return false
 	}
+
 	connected, err := controller.Connected()
 	if err != nil {
 		return false
 	}
+
 	return connected
 }
 
