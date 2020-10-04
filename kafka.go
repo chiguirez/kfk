@@ -22,6 +22,7 @@ type FallbackFunc func(context.Context, []byte) error
 
 func NewHandler(handlerFunc interface{}) MessageHandler {
 	guard.MessageHandler(handlerFunc)
+
 	return MessageHandler{reflect.TypeOf(handlerFunc), reflect.ValueOf(handlerFunc)}
 }
 
@@ -146,12 +147,12 @@ func (c *KafkaConsumer) AddFallback(fn FallbackFunc) {
 }
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
-	defer func() {
-		_ = c.consumerGroup.Close()
-	}()
+	c.consumer.ctx = ctx
 
 	for {
 		select {
+		case err := <-c.consumerGroup.Errors():
+			return err
 		case <-ctx.Done():
 			if !errors.Is(ctx.Err(), context.Canceled) {
 				return ctx.Err()
@@ -187,10 +188,12 @@ type consumer struct {
 	handlerList     messageHandlerList
 	topics          []string
 	fallbackHandler FallbackFunc
+	ctx             context.Context // sarama sessions closes context when re balancing even thou it keeps consuming messages so this is the faster way to mantain a non-closed copy of the main context
 }
 
 func (c *consumer) Setup(sarama.ConsumerGroupSession) error {
 	close(c.ready)
+
 	return nil
 }
 
@@ -212,7 +215,7 @@ func (c *consumer) ConsumeClaim(session sarama.ConsumerGroupSession, claim saram
 	ContextTopic := contextKey("Topic")
 
 	for message := range claim.Messages() {
-		ctx := context.WithValue(session.Context(), ContextTopic, message.Topic)
+		ctx := context.WithValue(c.ctx, ContextTopic, message.Topic)
 
 		err := c.handlerList.Handle(ctx, message)
 		if errors.Is(err, errHandlerNotFound) && c.fallbackHandler != nil {

@@ -11,6 +11,7 @@ func HaveTwoAttributes(handler interface{}) bool {
 
 func IsACtx(handler interface{}, attributePosition int) bool {
 	ctxInterface := reflect.TypeOf((*context.Context)(nil)).Elem()
+
 	return reflect.TypeOf(handler).In(attributePosition).Kind() == reflect.Interface &&
 		reflect.TypeOf(handler).In(attributePosition).Implements(ctxInterface)
 }
@@ -25,6 +26,7 @@ func IsAFunc(handler interface{}) bool {
 
 func FuncReturnError(handler interface{}) bool {
 	errorInterface := reflect.TypeOf((*error)(nil)).Elem()
+
 	return reflect.TypeOf(handler).Out(0).Implements(errorInterface)
 }
 
