@@ -1,10 +1,12 @@
-package guard
+package guard_test
 
 import (
 	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	. "github.com/chiguirez/kfk/v2/guard"
 )
 
 func TestMessageHandler(t *testing.T) {
