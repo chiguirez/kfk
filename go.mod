@@ -1,4 +1,4 @@
-module github.com/chiguirez/kfk/v2
+module github.com/chiguirez/kfk/v3
 
 go 1.13
 
