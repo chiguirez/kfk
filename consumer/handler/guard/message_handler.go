@@ -17,7 +17,16 @@ func IsACtx(handler interface{}, attributePosition int) bool {
 }
 
 func IsAStruct(handler interface{}, attributePosition int) bool {
-	return reflect.TypeOf(handler).In(attributePosition).Kind() == reflect.Struct
+	if reflect.TypeOf(handler).In(attributePosition).Kind() == reflect.Struct {
+		return true
+	}
+
+	if reflect.TypeOf(handler).In(attributePosition).Kind() == reflect.Ptr &&
+		reflect.TypeOf(handler).In(attributePosition).Elem().Kind() == reflect.Struct {
+		return true
+	}
+
+	return false
 }
 
 func IsAFunc(handler interface{}) bool {

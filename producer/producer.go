@@ -1,21 +1,25 @@
-package kfk
+package producer
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/Shopify/sarama"
 )
 
 // Producer.
-type KafkaProducer struct {
+type Producer struct {
 	producer sarama.SyncProducer
 	client   sarama.Client
 }
 
-// NewKafkaProducer.
-func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
+var errCreateProducer = fmt.Errorf("error during producer creation")
+
+// New.
+func New(kafkaBrokers []string) (*Producer, error) {
 	kafkaCfg := sarama.NewConfig()
 	kafkaCfg.Consumer.Return.Errors = true
 	kafkaCfg.Version = sarama.V1_0_0_0
@@ -24,36 +28,43 @@ func NewKafkaProducer(kafkaBrokers []string) (*KafkaProducer, error) {
 
 	kafkaClient, err := sarama.NewClient(kafkaBrokers, kafkaCfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errCreateProducer, err)
 	}
 
 	producer, err := sarama.NewSyncProducerFromClient(kafkaClient)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", errCreateProducer, err)
 	}
 
-	return &KafkaProducer{producer: producer, client: kafkaClient}, nil
+	return &Producer{producer: producer, client: kafkaClient}, nil
 }
 
+var errSendProducer = fmt.Errorf("error sending message")
+
 // Send a message to a topic to be scattered using the key.
-func (p *KafkaProducer) Send(topic, key string, message interface{}) error {
+func (p *Producer) Send(topic, key string, message interface{}) error {
 	bytes, err := p.encode(message)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w:%v", errSendProducer, err)
 	}
 
 	producerMessage := &sarama.ProducerMessage{
-		Topic:   topic,
-		Value:   sarama.ByteEncoder(bytes),
-		Key:     sarama.ByteEncoder(key),
-		Headers: []sarama.RecordHeader{messageTypeHeader(message)},
+		Topic:     topic,
+		Value:     sarama.ByteEncoder(bytes),
+		Key:       sarama.ByteEncoder(key),
+		Headers:   []sarama.RecordHeader{messageTypeHeader(message)},
+		Timestamp: time.Now(),
 	}
-	_, _, err = p.producer.SendMessage(producerMessage)
 
-	return err
+	_, _, err = p.producer.SendMessage(producerMessage)
+	if err != nil {
+		return fmt.Errorf("%w:%v", errSendProducer, err)
+	}
+
+	return nil
 }
 
-func (p KafkaProducer) HealthCheck(_ context.Context) bool {
+func (p Producer) HealthCheck(_ context.Context) bool {
 	controller, err := p.client.Controller()
 	if err != nil {
 		return false
@@ -72,7 +83,7 @@ type Marshaller interface {
 	MarshalKFK() ([]byte, error)
 }
 
-func (p *KafkaProducer) encode(message interface{}) ([]byte, error) {
+func (p *Producer) encode(message interface{}) ([]byte, error) {
 	marshall, ok := message.(Marshaller)
 	if ok {
 		return marshall.MarshalKFK()
