@@ -8,6 +8,14 @@ Message handlers implement `messageHandler` interface
 
 Check `kafka_test.go` for more information and examples of use
 
+## Installing
+
+We're using vendor versioning on the modules, for that reason if you want to install the last version you will to do:
+
+```sh
+$ go get github.com/chiguirez/kfk/v2
+```
+
 # Authors
 
 * [Pau Galindo](https://github.com/paugalindo)
