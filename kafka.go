@@ -147,6 +147,10 @@ func (c *KafkaConsumer) AddFallback(fn FallbackFunc) {
 }
 
 func (c *KafkaConsumer) Start(ctx context.Context) error {
+	defer func() {
+		_ = c.consumerGroup.Close()
+	}()
+
 	for {
 		select {
 		case err := <-c.consumerGroup.Errors():
