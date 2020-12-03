@@ -7,7 +7,7 @@ import (
 
 	"github.com/Shopify/sarama"
 
-	"github.com/chiguirez/kfk/v2/consumer/handler"
+	"github.com/chiguirez/kfk/v3/consumer/handler"
 )
 
 type Consumer struct {

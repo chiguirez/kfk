@@ -10,7 +10,7 @@ import (
 	"github.com/Shopify/sarama"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/chiguirez/kfk/v2/consumer/handler/guard"
+	"github.com/chiguirez/kfk/v3/consumer/handler/guard"
 )
 
 type Handler struct {

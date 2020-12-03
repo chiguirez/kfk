@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	. "github.com/chiguirez/kfk/v2/consumer/handler/guard"
+	. "github.com/chiguirez/kfk/v3/consumer/handler/guard"
 )
 
 type guardSuite struct {
