@@ -10,9 +10,9 @@ import (
 	"github.com/Shopify/sarama"
 	"github.com/stretchr/testify/suite"
 
-	"github.com/chiguirez/kfk/v2/consumer"
-	"github.com/chiguirez/kfk/v2/consumer/handler"
-	"github.com/chiguirez/kfk/v2/producer"
+	"github.com/chiguirez/kfk/v3/consumer"
+	"github.com/chiguirez/kfk/v3/consumer/handler"
+	"github.com/chiguirez/kfk/v3/producer"
 )
 
 type kfkSuite struct {
